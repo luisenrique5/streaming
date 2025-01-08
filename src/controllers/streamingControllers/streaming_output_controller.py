@@ -14,9 +14,9 @@ class StreamingOutput:
     def get_streaming_output(self):
         api_name = 'streaming_output'
         
-        token_check = api_token_check(request.headers, self.__client, self.__username, api_name)
-        token_check_dict = json.loads(token_check)
-        if str(token_check_dict["statusType"]) != 'SUCCESS':
+        token_check = api_token_check(request.headers, self.__client, self.__project, self.__stream, self.__username, self.__scenario, api_name=api_name)
+        token_check_dict=json.loads(token_check)
+        if str(token_check_dict["statusType"]) != 'VALID':
             resp = Response(response=token_check, status=401, mimetype="application/json")
             resp.headers["Content-Type"] = "application/json"
             return resp
@@ -31,7 +31,8 @@ class StreamingOutput:
                 self.__number_of_rows
             )
             results = streaming_output_services.calculate_get_streaming_output()
-            
+            output_message = (f"{self.__number_of_rows} streaming rows of data retrieved. "
+                              f"client: '{self.__client}', project: '{self.__project}', stream: '{self.__stream}'")
             logging_report(f"{api_name} 200044 SUCCESS.", 'INFO', api_name)
 
             return jsonify({
@@ -39,7 +40,7 @@ class StreamingOutput:
                 'requestData': results,
                 'statusType': "Success",
                 'statusCode': 200,
-                'statusMessage': "Results retrieved successfully"
+                'statusMessage': output_message
             }), 200
         except Exception as e:
             logging_report(f'500000 | Error on {api_name}: {str(e)}', 'ERROR', api_name)

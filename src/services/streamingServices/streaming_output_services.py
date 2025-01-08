@@ -1,12 +1,26 @@
+import os
+import json
+import traceback
+
+# Asegúrate de que pandas está importado
+import pandas as pd
+
+# Si tu servicio retorna un objeto Flask Response
+from flask import Response
+
+# Ajusta estos imports según tu estructura real
 from src.entities.streaming_environment import StreamingEnvironment
 from src.entities.session_manager import SessionManager
+from src.entities.plan_loader import PlanLoader
+from src.entities.config_backend import ConfigBackend
 from src.entities.directory_structure import DirectoryStructure
+from src.entities.streaming_input import StreamingInput
 from src.repositories.well_repository import WellRepository
 from src.repositories.rig_repository import RigRepository
 from src.repositories.streaming_repository import StreamingRepository
-from utils_backend import modify_strings, logging_report
-import traceback
-import json
+from src.entities.real_time_part import DrillDataProcessor
+from utils_backend import *
+
 
 class GetStreamingOutput:
     def __init__(self, client, project, stream, username, scenario, number_of_rows):
@@ -51,65 +65,79 @@ class GetStreamingOutput:
     
     def __get_and_save_data(self, input_folder):
         """Obtiene y guarda todos los datos necesarios"""
-        # Obtener datos históricos
-        well_data = self.__well_repo.get_well_general()
-        if well_data is not None:
-            well_data.to_csv(f'{input_folder}database/well_general.csv', index=False)
-            logging_report(f'EXECUTED | 200011 | {self.__client} | {self.__project} | {self.__stream} | {self.__username} | {self.__scenario} | well_general table successfully downloaded', 'INFO', self.__api_name)
-        
-        # Datos time based drill
-        tbd_data = self.__well_repo.get_time_based_drill()
-        if tbd_data is not None:
-            tbd_data.to_csv(f'{input_folder}database/time_based_drill.csv', index=False)
-            logging_report(f'EXECUTED | 200012 | {self.__client} | {self.__project} | {self.__stream} | {self.__username} | {self.__scenario} | time_based_drill table successfully downloaded', 'INFO', self.__api_name)
-        
-        # Datos de rig design
-        rig_data = self.__rig_repo.get_rig_design()
-        if rig_data is not None:
-            rig_data.to_csv(f'{input_folder}database/rig_design.csv', index=False)
-            logging_report(f'EXECUTED | 200014 | {self.__client} | {self.__project} | {self.__stream} | {self.__username} | {self.__scenario} | rig_design table successfully downloaded', 'INFO', self.__api_name)
-        
-        # Datos en tiempo real
-        real_time_tbd = self.__streaming_repo.get_real_time_tbd()
-        if real_time_tbd is not None:
-            real_time_tbd.to_csv(f'{input_folder}real_time/time_based_drill_current_well.csv', index=False)
-            logging_report(f'EXECUTED | 200015 | {self.__client} | {self.__project} | {self.__stream} | {self.__username} | {self.__scenario} | time_based_drill_current_well table successfully downloaded', 'INFO', self.__api_name)
-        
-        real_time_os = self.__streaming_repo.get_real_time_os()
-        if real_time_os is not None:
-            real_time_os.to_csv(f'{input_folder}real_time/official_survey_current_well.csv', index=False)
-            logging_report(f'EXECUTED | 200016 | {self.__client} | {self.__project} | {self.__stream} | {self.__username} | {self.__scenario} | official_survey_current_well table successfully downloaded', 'INFO', self.__api_name)
-        
-        # Obtener datos adicionales para el JSON
-        current_measured_depth = self.__streaming_repo.get_current_measured_depth()
-        
-        return {
-            'well_data': well_data,
-            'tbd_data': tbd_data,
-            'rig_data': rig_data,
-            'real_time_tbd': real_time_tbd,
-            'real_time_os': real_time_os,
-            'current_measured_depth': current_measured_depth
-        }
-    
-    def __create_input_json(self, input_folder, current_measured_depth):
-        """Crea el archivo JSON con los inputs necesarios"""
-        input_data = {
-            'current_bit_size': current_measured_depth,
-            'CURRENT_WELL_NAME': 'RT',
-            'WELLS_SELECT_NAME': []  # Aquí podrías agregar la lógica para obtener los nombres de los pozos
-        }
-        
-        with open(f'{input_folder}inputs_for_rt.json', 'w', encoding='utf-8') as f:
-            json.dump(input_data, f, indent=6)
-            
-        logging_report(f'EXECUTED | 200021 | {self.__client} | {self.__project} | {self.__stream} | {self.__username} | {self.__scenario} | inputs_for_rt.json file successfully constructed', 'INFO', self.__api_name)
-        
-    def calculate_get_streaming_output(self):
         try:
+            result_data = {}
+            
+            # Historic tables
+            well_data = self.__well_repo.get_well_general()
+            if well_data is not None:
+                well_data.to_csv(f'{input_folder}database/well_general.csv', index=False)
+                logging_report(f'EXECUTED | 200011 | well_general table saved', 'INFO', self.__api_name)
+            
+            # Time based drill
+            tbd_path = f'{input_folder}database/time_based_drill.csv'
+            if not os.path.exists(tbd_path):
+                tbd_data = self.__well_repo.get_time_based_drill()
+                if tbd_data is not None:
+                    tbd_data.to_csv(tbd_path, index=False)
+                    logging_report(f'EXECUTED | 200012 | time_based_drill table saved', 'INFO', self.__api_name)
+                    
+            plan_loader = PlanLoader(
+                input_folder, self.__client, self.__project,
+                self.__stream, self.__username, self.__scenario, self.__api_name
+            )    
+            plan_loader.load_plan_files()
+            
+            # Rig design
+            rig_data = self.__rig_repo.get_rig_design()
+            if rig_data is not None:
+                # Procesar filter_dict fields
+                for col in ['filter_dict', 'filter_dict_1', 'filter_dict_5', 'filter_dict_10', 'filter_dict_15']:
+                    rig_data[col] = rig_data[col].apply(lambda x: '{' + ', '.join(x) + '}')
+                rig_data.to_csv(f'{input_folder}database/rig_design.csv', index=False)
+                logging_report(f'EXECUTED | 200014 | rig_design table saved', 'INFO', self.__api_name)
+
+            # Real time data - TBD
+            real_time_tbd = self.__streaming_repo.get_real_time_tbd()
+            if real_time_tbd is not None:
+                real_time_tbd.to_csv(f'{input_folder}real_time/time_based_drill_current_well.csv', index=False)
+                logging_report(f'EXECUTED | 200015 | time_based_drill_current_well saved', 'INFO', self.__api_name)
+
+            # Real time data - OS
+            real_time_os = self.__streaming_repo.get_real_time_os()
+            if real_time_os is not None:
+                real_time_os.to_csv(f'{input_folder}real_time/official_survey_current_well.csv', index=False)
+                logging_report(f'EXECUTED | 200016 | official_survey_current_well saved', 'INFO', self.__api_name)
+
+            # Get current measured depth
+            current_measured_depth = self.__streaming_repo.get_current_measured_depth()
+            if current_measured_depth is not None:
+                result_data['current_measured_depth'] = current_measured_depth
+
+            return result_data
+                
+        except Exception as e:
+            logging_report(f'FAILURE | 400000 | Error in get_and_save_data: {str(e)}', 'ERROR', self.__api_name)
+            raise
+         
+    def calculate_get_streaming_output(self):
+        """
+        Método principal que:
+        - Configura ambiente y estructura de directorios.
+        - Obtiene datos (historic y real-time).
+        - Procesa la data con DrillDataProcessor.
+        - Devuelve un JSON (por medio de Flask `Response`) con data en orient='records'.
+        """
+        try:
+            current_dir = os.path.dirname(__file__)
+            # Ruta base para tus utilidades, ajústala según tu estructura real
+            base_path = os.path.abspath(os.path.join(current_dir, '..', '..', 'utils'))
+            
             logging_report(
-                f'START | 000000 | {self.__client} | {self.__project} | {self.__stream} | {self.__username} | {self.__scenario} | START get_input_data_streams.py',
-                'INFO', self.__api_name)
+                f'START | 000000 | {self.__client} | {self.__project} | {self.__stream} | '
+                f'{self.__username} | {self.__scenario} | START get_input_data_streams.py',
+                'INFO', self.__api_name
+            )
             
             # Modificar strings
             strings = modify_strings(self.__username, self.__scenario)
@@ -134,16 +162,88 @@ class GetStreamingOutput:
             # Obtener y guardar datos
             data = self.__get_and_save_data(input_folder)
             
-            # Crear JSON de entrada
-            if data['current_measured_depth'] is not None:
-                self.__create_input_json(input_folder, data['current_measured_depth'])
+            # Si obtuvimos measured_depth, procedemos
+            if 'current_measured_depth' in data:
+                current_measured_depth = data['current_measured_depth']
+                streaming_input = StreamingInput(
+                    self.__client,
+                    self.__project,
+                    self.__stream,
+                    self.__username,
+                    self.__scenario,
+                    self.__api_name
+                )
+                current_hole_diameter, _ = streaming_input.get_current_bit_size(
+                    input_folder, current_measured_depth
+                )
+                streaming_input.create_inputs_json(input_folder, current_hole_diameter)
+
+            # Procesar la data con DrillDataProcessor
+            process_drilling_data = DrillDataProcessor(input_folder)
+            # Este .process() suponemos que retorna la ruta donde se guardan los CSVs procesados
+            process = process_drilling_data.process()
             
-            logging_report(
-                f'END | 999999 | {self.__client} | {self.__project} | {self.__stream} | {self.__username} | {self.__scenario} | END get_input_data_streams.py',
-                'INFO', self.__api_name)
-            
+            # Cargar los CSVs resultantes
+            df_rt_tbd = pd.read_csv(f'{process}/real_time_update/time_based_drill_current_well_out.csv')
+            df_rt_os = pd.read_csv(f'{process}/real_time_update/official_survey_current_well_out.csv')
+
+            # Orden inverso
+            df_rt_tbd = df_rt_tbd.iloc[::-1]
+            df_rt_os = df_rt_os.iloc[::-1]
+
+            # Manejo de la granularidad (self.__number_of_rows)
+            if self.__number_of_rows == 'aggregated':
+                # Lógica de muestreo cada cierto número de filas
+                if len(df_rt_tbd) > 100000:
+                    df_rt_tbd = df_rt_tbd.iloc[::80, :]
+                elif len(df_rt_tbd) > 50000:
+                    df_rt_tbd = df_rt_tbd.iloc[::40, :]
+                elif len(df_rt_tbd) > 20000:
+                    df_rt_tbd = df_rt_tbd.iloc[::20, :]
+                elif len(df_rt_tbd) > 10000:
+                    df_rt_tbd = df_rt_tbd.iloc[::10, :]
+                elif len(df_rt_tbd) > 5000:
+                    df_rt_tbd = df_rt_tbd.iloc[::8, :]
+                elif len(df_rt_tbd) > 2000:
+                    df_rt_tbd = df_rt_tbd.iloc[::4, :]
+                elif len(df_rt_tbd) > 1000:
+                    df_rt_tbd = df_rt_tbd.iloc[::2, :]
+            else:
+                df_rt_tbd = df_rt_tbd.iloc[:int(self.__number_of_rows)]
+
+            # Rellenar NaN con un valor distinto
+            df_rt_tbd = df_rt_tbd.fillna(-999.25)
+            dict_rt_tbd = df_rt_tbd.to_dict(orient='records')
+
+            # Repetir la misma lógica para official survey
+            if self.__number_of_rows == 'aggregated':
+                if len(df_rt_os) > 100000:
+                    df_rt_os = df_rt_os.iloc[::80, :]
+                elif len(df_rt_os) > 50000:
+                    df_rt_os = df_rt_os.iloc[::40, :]
+                elif len(df_rt_os) > 20000:
+                    df_rt_os = df_rt_os.iloc[::20, :]
+                elif len(df_rt_os) > 10000:
+                    df_rt_os = df_rt_os.iloc[::10, :]
+                elif len(df_rt_os) > 5000:
+                    df_rt_os = df_rt_os.iloc[::8, :]
+                elif len(df_rt_os) > 2000:
+                    df_rt_os = df_rt_os.iloc[::4, :]
+                elif len(df_rt_os) > 1000:
+                    df_rt_os = df_rt_os.iloc[::2, :]
+            else:
+                df_rt_os = df_rt_os.iloc[:int(self.__number_of_rows)]
+
+            df_rt_os = df_rt_os.fillna(-999.25)
+            dict_rt_os = df_rt_os.to_dict(orient='records')
+
+            data = {"os": dict_rt_os,
+                    "tbd": dict_rt_tbd}
+            return data
+
         except Exception as e:
             print(f"Error en calculate_get_streaming_output: {str(e)}")
             print("Traceback completo:")
             print(traceback.format_exc())
+            # Relanzas la excepción para que tu manejador superior la pueda registrar
             raise

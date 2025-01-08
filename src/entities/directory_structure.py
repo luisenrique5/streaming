@@ -22,9 +22,9 @@ class DirectoryStructure:
             f'{self.input_folder}plan',
             f'{self.input_folder}database',
             f'{self.input_folder}real_time',
-            f'{self.input_folder}csv',
-            f'{self.input_folder}real_time_update',
-            f'{self.input_folder}real_time_update/csv'
+            self.input_folder + 'csv/',
+            self.input_folder + 'real_time_update/',
+            self.input_folder + 'real_time_update/csv/'
         ]
         
         for directory in directories:
