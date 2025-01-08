@@ -1661,7 +1661,6 @@ class BI_Drill_Utility:
 
         return df_conn_trip
    
-        #function to compute connection time tables
     def compute_df_conn(self, df_input: pd.DataFrame, 
                         compute_col: str, activity: str, dtime_dict: dict,
                         stand_length = None, delta_stand_length = 5,
@@ -2079,128 +2078,6 @@ class BI_Drill_Utility:
 
         return total_time_sub_act
 
-    def get_kpi_color(self, df_input: pd.DataFrame,
-                    df_kpi_input: pd.DataFrame,
-                    LABEL: str, compute_col: str, kpi_col: str,
-                    name: str, kpi_ascend: bool,
-                    WELLID = None, BS = None, HD = None, BD = None,
-                    TIME = None, DATETIME = None, KPIC = None,
-                    replace_dot = None, round_ndigits = None, 
-                    read_folder = None, save_folder = None, save = True) -> pd.DataFrame:
-        
-        if WELLID is None:
-            WELLID = self.config_backend.WELLID
-        
-        if BS is None:
-            BS = self.config_backend.BS
-        
-        if HD is None:
-            HD = self.config_backend.HD
-        
-        if BD is None:
-            BD = self.config_backend.BD
-        
-        if TIME is None:
-            TIME = self.config_backend.TIME
-        
-        if DATETIME is None:
-            DATETIME = self.config_backend.DATETIME
-        
-        if KPIC is None:
-            KPIC = self.config_backend.KPIC
-        
-        if replace_dot is None:
-            replace_dot = self.config_backend.REPLACE_DOT
-        
-        if round_ndigits is None:
-            round_ndigits = self.config_backend.ROUND_NDIGITS
-        
-        if read_folder is None:
-            read_folder = self.config_backend.SAVE_FOLDER
-        
-        if save_folder is None: 
-            save_folder = self.config_backend.SAVE_FOLDER         
-                                           
-        """This function computes kpi color for different activities.
-        Here df_input is time-based drilling data,
-        df_kpi_input is kpi activity data (e.g. df_conn_drill),
-        LABEL is a column name for consecutive label (e.g. LABELcd),
-        compute_col is a compute column name (e.g. CONNDTIME)
-        kpi_col is kpi column name (e.g. CONNDTIME)
-        name is an activity file name (e.g. 'conn_trip', 'conn_drill'),
-        kpi_ascend is a flag for ascend or descend best direction for kpi,
-        WELLID, BS, HD, TIME, DATETIME, KPIC represent standard column names, 
-        see standard naming and ada_naming_convention.xlsx file for descriptions,  
-        replace_dot is a symbol to replace dot in table name containing bit size 
-        (e.g. if replace_dot = 'p' then '12.5' -> '12p5')
-        round_ndigits is number of digits to round calculations,   
-        save_folder is a folder to save computed dataframe,
-        save is a flag to save data. 
-        Function returns kpi activity dataframe with kpi color codes in kpi_col column."""
-
-        #*** fix on Aug 12: add activity in case they are missing ***#
-        kpi_cols = [DATETIME, HD, BD, TIME, BS, compute_col, 
-                    compute_col + '_worst',compute_col + '_avg', 
-                    compute_col + '_best', KPIC]
-    
-        if df_kpi_input.empty:
-            df_kpi = pd.DataFrame([[0]*len(kpi_cols)], columns = kpi_cols)
-        elif df_kpi_input[compute_col].sum() == 0:
-            df_kpi = pd.DataFrame([[0]*len(kpi_cols)], columns = kpi_cols)
-        else:
-            df = df_input.copy()
-            #df_kpi = df_kpi_input.copy()
-
-            df_aux = df.groupby([WELLID, LABEL])[[HD, BD, DATETIME, TIME]].min().reset_index()
-            df_kpi = df_kpi_input.reset_index().merge(df_aux, how = 'left', 
-                                left_on=[WELLID, LABEL], right_on =[WELLID, LABEL])
-
-            #add kpi boundaries that depend on bit size
-            df_kpi[compute_col + '_worst'] = np.nan
-            df_kpi[compute_col + '_avg'] = np.nan
-            df_kpi[compute_col + '_best'] = np.nan
-
-            #get current well bit sizes
-            bit_sizes = df[BS].unique()
-            #remove no nans
-            bit_sizes = [x for x in bit_sizes if x == x]
-
-            #compute kpi boundaries for all section sizes
-            for hole_diameter in bit_sizes:
-                
-                bs = str(hole_diameter).replace('.', replace_dot)
-
-                kpi = pd.read_csv(f'{read_folder}csv/kpi_boxplot_bs_{bs}.csv',index_col=[0])
-                kpi_low = kpi.loc['q25', kpi_col]
-                kpi_avg = kpi.loc['q50', kpi_col]
-                kpi_high = kpi.loc['q75', kpi_col]
-                
-                df_kpi.loc[df_kpi[BS] == hole_diameter, compute_col + '_best'] = kpi_low
-                df_kpi.loc[df_kpi[BS] == hole_diameter, compute_col + '_avg']  = kpi_avg
-                df_kpi.loc[df_kpi[BS] == hole_diameter, compute_col + '_worst']  = kpi_high
-
-            #class 1: historic performance
-            df_kpi[KPIC] = np.ones(df_kpi.shape[0]).astype(int)
-
-            if kpi_ascend:
-                #class 0: overperform
-                df_kpi.loc[(df_kpi[compute_col] > df_kpi[compute_col + '_best']), KPIC] *= 0
-                #class 2: underperform
-                df_kpi.loc[(df_kpi[compute_col] < df_kpi[compute_col + '_worst']), KPIC] *= 2
-            else:
-                #class 0: overperform
-                df_kpi.loc[(df_kpi[compute_col] < df_kpi[compute_col + '_best']), KPIC] *= 0
-                #class 2: underperform
-                df_kpi.loc[(df_kpi[compute_col] > df_kpi[compute_col + '_worst']), KPIC] *= 2
-
-            df_kpi = df_kpi[kpi_cols].fillna(0)
-
-        if save:
-            df_kpi.round(round_ndigits).to_csv(f'{save_folder}csv/{name}_time_current_well.csv', index = False)
-
-        return df_kpi
-    
-    
     def kpi_boxplot(self, df_, df_wt_wt_, df_trip_, df_conn_drill_, df_conn_trip_, 
                         hole_diameter: float,
                         wells_select: list, current_well: int, 
