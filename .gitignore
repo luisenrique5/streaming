@@ -4,16 +4,18 @@ env/
 users/
 #Ignoring the config.json file
 config/
+#Ignoring the credentials file
+credentials/
 #Ignoring the columns directory
 cols/
-#Ignoring the files inside data directory
-data/*
 #Ignoring the files inside input_data directory
 input_data/*
 #Ignoring the files inside output_data directory
 output_data/*
 #Ignoring the csv_files_list.txt file
 csv_files_list.txt
+#Ignoring the .session.json file
+.session.json
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
