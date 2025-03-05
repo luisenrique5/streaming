@@ -26,9 +26,8 @@ sns.set_style("whitegrid")
 sns.set_context("paper", font_scale=1.8)
 
 class BI_Drill_Utility:
-    def __init__(self, input_folder):
-        self.input_folder = input_folder
-        self.config_backend = ConfigBackend(INPUT_FOLDER=input_folder)
+    def __init__(self, base_key: str, redis_client=None):
+        self.config_backend = ConfigBackend(base_key, redis_client)
         self.config_backend.load_well_general()
         self.config_backend.load_rig_design()
         pd.set_option('display.precision', self.config_backend.ROUND_NDIGITS)

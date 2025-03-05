@@ -1,17 +1,20 @@
 import os
+import json
 import pandas as pd
+from io import StringIO
 from utils_backend import *  
 
 class ConfigBackend:
     def __init__(
         self,
-        INPUT_FOLDER: str, 
+        base_key: str,      # Ej. 'input_data:client:project:stream:username:scenario'
+        redis_client,       # Conexión a Redis
         POSTJOB: bool = False,
         OPERATOR: str = "SIERRACOL",
-        HOLE_DIAMETERS: list = [12.25, 8.5, 6.125],
+        HOLE_DIAMETERS: list = None,
         WELL_TYPE: str = "H",
-        DLS_RANGE: list = ["any","any","any","0"],
-        INC_RANGE: list = ["any","any","any","0","0"],
+        DLS_RANGE: list = None,
+        INC_RANGE: list = None,
         NO_RT: bool = False,
         DTIME_RT = None,
         NULL_VALUE: float = -999.25,
@@ -20,38 +23,42 @@ class ConfigBackend:
     ):
         """
         Constructor de la clase. Define parámetros y variables globales.
-        Carga la configuración desde el archivo JSON en el INPUT_FOLDER.
-        
-        Args:
-            INPUT_FOLDER: Ruta base donde están los datos
+        Carga la configuración desde Redis, en {base_key}:inputs_for_rt
         """
-        # Cargar configuración del JSON predefinido
-        config_file_path = os.path.join(INPUT_FOLDER, "inputs_for_rt.json")
-        with open(config_file_path, 'r') as f:
-            config_json = json.load(f)
-        
-        # Obtener valores del JSON
+        self.base_key = base_key
+        self.redis_client = redis_client
+
+        # Leer la "configuración principal" desde Redis (análogo a inputs_for_rt.json)
+        inputs_key = f"{self.base_key}:inputs_for_rt"
+        inputs_data = redis_client.get(inputs_key)
+        if not inputs_data:
+            config_json = {}
+            print(f"No se encontró la clave '{inputs_key}' en Redis. Se usarán defaults.")
+        else:
+            config_json = json.loads(inputs_data)
+
+        # Del JSON, obtenemos CURRENT_WELL_NAME, WELLS_SELECT_NAME, current_bit_size
         self.CURRENT_WELL_NAME = config_json.get("CURRENT_WELL_NAME", "RT")
         self.WELLS_SELECT_NAME = config_json.get("WELLS_SELECT_NAME", [])
         current_bit_size = config_json.get("current_bit_size")
-        
-        # Si hay un bit_size en el JSON, ponerlo al inicio de HOLE_DIAMETERS
-        if current_bit_size is not None:
-            HOLE_DIAMETERS = [current_bit_size] + [
-                d for d in HOLE_DIAMETERS if d != current_bit_size
-            ]
 
-        # ------------------------------------------------------------
+        # Si hay un current_bit_size, se coloca al inicio de HOLE_DIAMETERS
+        if current_bit_size:
+            if HOLE_DIAMETERS is None:
+                HOLE_DIAMETERS = [current_bit_size]
+            else:
+                HOLE_DIAMETERS = [current_bit_size] + [d for d in HOLE_DIAMETERS if d != current_bit_size]
+        if HOLE_DIAMETERS is None:
+            HOLE_DIAMETERS = [12.25, 8.5, 6.125]
+        if DLS_RANGE is None:
+            DLS_RANGE = ["any", "any", "any", "0"]
+        if INC_RANGE is None:
+            INC_RANGE = ["any", "any", "any", "0", "0"]
+
         # 1. Parámetros principales
-        # ------------------------------------------------------------
         self.POSTJOB = POSTJOB
         self.OPERATOR = OPERATOR
-        
-        # Ajustar la lista WELLS_SELECT_NAME para excluir el CURRENT_WELL_NAME
-        self.WELLS_SELECT_NAME = [
-            w for w in self.WELLS_SELECT_NAME if w != self.CURRENT_WELL_NAME
-        ]
-
+        self.WELLS_SELECT_NAME = [w for w in self.WELLS_SELECT_NAME if w != self.CURRENT_WELL_NAME]
         self.HOLE_DIAMETERS = HOLE_DIAMETERS
         self.WELL_TYPE = WELL_TYPE
         self.DLS_RANGE = DLS_RANGE
@@ -62,63 +69,62 @@ class ConfigBackend:
         self.DTIME_RT = DTIME_RT
         self.NULL_VALUE = NULL_VALUE
 
-        # ------------------------------------------------------------
-        # 2. Paths y rutas (usando el INPUT_FOLDER proporcionado)
-        # ------------------------------------------------------------
-        self.INPUT_FOLDER = INPUT_FOLDER
-        self.SAVE_FOLDER = INPUT_FOLDER.replace("input_data", "output_data")
-        self.SAVE_REAL_TIME_FOLDER = os.path.join(self.SAVE_FOLDER, "real_time_update")
+        # 2. Paths y rutas
+        # Extraemos client, project, stream, username, scenario del base_key (se asume formato correcto)
+        splitted = base_key.split(":")
+        if len(splitted) < 6 or splitted[0] != "input_data":
+            raise ValueError(f"El base_key debe tener el formato 'input_data:client:project:stream:username:scenario': {base_key}")
+        self.client = splitted[1]
+        self.project = splitted[2]
+        self.stream = splitted[3]
+        self.username = splitted[4]
+        self.scenario = splitted[5]
 
-        # ------------------------------------------------------------
+        # Creamos rutas locales válidas para guardado
+        self.SAVE_FOLDER = os.path.join("output_data", self.client, self.project, self.stream, self.username, self.scenario)
+        self.SAVE_REAL_TIME_FOLDER = os.path.join(self.SAVE_FOLDER, "real_time_update")
+        # Se crean los directorios si no existen
+        os.makedirs(self.SAVE_FOLDER, exist_ok=True)
+        os.makedirs(self.SAVE_REAL_TIME_FOLDER, exist_ok=True)
+
         # 3. Parámetros de reporte y guardado
-        # ------------------------------------------------------------
         if self.POSTJOB:
-            # postjob
-            self.report_folder = "postjob_report/"
+            self.report_folder = "postjob_report"
             self.SAVE_XLSX = 1
             self.KEEP_RT_IN_HISTORIC = True
         else:
-            # daily
-            self.report_folder = "daily_report/"
+            self.report_folder = "daily_report"
             self.SAVE_XLSX = 0
             self.KEEP_RT_IN_HISTORIC = False
 
-        self.SAVE_DAILY_REPORT_FOLDER = self.SAVE_FOLDER + self.report_folder
-        self.DAILY_REPORT_PLOTS_PATH = self.SAVE_DAILY_REPORT_FOLDER.strip(".") + "plot/"
+        self.SAVE_DAILY_REPORT_FOLDER = os.path.join(self.SAVE_FOLDER, self.report_folder)
+        self.DAILY_REPORT_PLOTS_PATH = os.path.join(self.SAVE_DAILY_REPORT_FOLDER, "plot")
+        os.makedirs(self.SAVE_DAILY_REPORT_FOLDER, exist_ok=True)
+        os.makedirs(self.DAILY_REPORT_PLOTS_PATH, exist_ok=True)
 
-        # ------------------------------------------------------------
-        # 4. Flags que dependen de POSTJOB y NO_RT
-        # ------------------------------------------------------------
+        # 4. Flags dependientes de POSTJOB y NO_RT
         self.READ_CURRENT_RIG_LABELS = False
         self.READ_BS_MM_CASING = False
         if self.POSTJOB or self.NO_RT:
             self.READ_CURRENT_RIG_LABELS = True
             self.READ_BS_MM_CASING = True
 
-        # ------------------------------------------------------------
         # 5. Parámetros de formato
-        # ------------------------------------------------------------
         self.ROUND_NDIGITS = ROUND_NDIGITS
         self.REPLACE_DOT = REPLACE_DOT
         self.STYLE = {"selector": "caption", "props": [("font-weight", "bold"), ("color", "k")]}
 
-        # ------------------------------------------------------------
-        # 6. Variables que se llenan al cargar los datos
-        # ------------------------------------------------------------
+        # 6. Variables que se llenan al cargar datos
         self.df_wells = None
         self.well_name_dict = None
         self.well_name_dict_swap = None
         self.CURRENT_WELL_ID = None
         self.WELLS_SELECT_ID = None
         self.RIG_NAME = None
-
         self.df_rig = None
         self.STAND_LENGTH = None
 
-        # ------------------------------------------------------------
         # 7. Nombres de columnas (estándar)
-        # ------------------------------------------------------------
-        #Well info
         self.WELLID = 'well_id'
         self.WELL = 'well_name'
         self.WELLTYPE = 'well_type'
@@ -126,8 +132,6 @@ class ConfigBackend:
         self.RIG = 'rig'
         self.FIELD = 'field'
         self.SPUD = 'spud_date'
-
-        #Drilling parameters
         self.BS = 'hole_diameter'
         self.HD = 'measured_depth'
         self.BD = 'bit_depth'
@@ -145,23 +149,17 @@ class ConfigBackend:
         self.PVT = 'pit_volume'
         self.APRESS = 'annular_pressure'
         self.HSI = 'hsi'
-
-        #Logging curves
         self.GR = 'gamma'
         self.GRD = 'gamma_depth'
-
-        #Formation tops
         self.FORM = 'formation'
         self.FORMTOP = 'formation_top_depth'
         self.FORMBOT = 'formation_bottom_depth'
         self.FORMTOPTIME = 'formation_top_time'
         self.FORMBOTTIME = 'formation_bottom_time'
-
-        #Time
         self.DATETIME = 'datetime'
         self.DATETIMED = self.DATETIME + '_day'
-        self.TIME = 'cumulative_time' #minutes
-        self.TIMEDAY = 'cumulative_time_days' #days
+        self.TIME = 'cumulative_time'
+        self.TIMEDAY = 'cumulative_time_days'
         self.DAYN = 'day_number'
         self.MMDD = 'month_day'
         self.BITIMEFROM = 'bi_datetime_from'
@@ -170,22 +168,18 @@ class ConfigBackend:
         self.BISECTO = 'bi_sections_datetime_to'
         self.CASINGTIMEFROM = 'casing_datetime_from'
         self.CASINGTIMETO = 'casing_datetime_to'
-
-        #Consecutive labels
         self.LABEL = 'consecutive_labels'
         self.LABELct = self.LABEL + '_conn_trip'
         self.LABELcd = self.LABEL + '_conn_drill'
         self.LABELbtwn = self.LABEL + '_btwn'
-
-        #Surveys
-        self.DDI = 'ddi' #drilling difficulty index
+        self.DDI = 'ddi'
         self.TVD = 'tvd'
         self.AZM = 'azm'
         self.INC = 'incl'
         self.NS = 'ns'
         self.EW = 'ew'
         self.VS = 'vs'
-        self.DLS = 'dls'#(deg/100ft)
+        self.DLS = 'dls'
         self.WSEC = 'well_section'
         self.DDIR = 'ddi_range'
         self.UWDEP = 'unwrap_departure'
@@ -193,12 +187,8 @@ class ConfigBackend:
         self.ATORT = 'abs_tortuosity'
         self.DLSR = 'dls_range'
         self.INCR = 'inc_range'
-
-        #Casing and motor
         self.CASING = 'casing'
         self.MM = 'mud_motor'
-
-        #Calculate
         self.MSE = 'mse'
         self.WTWT = 'weight_to_weight'
         self.PIPESP = 'pipe_speed'
@@ -209,12 +199,8 @@ class ConfigBackend:
         self.CONNTIME = 'connection_time'
         self.DD = 'depth_drilled'
         self.WCRC = 'wcr'
-
-        #Enovate rig activities columns
         self.RSUPER = 'rig_super_state'
         self.RSUBACT = 'rig_sub_activity'
-
-        #Auxiliary
         self.dBD = 'delta_' + self.BD
         self.dBH = 'delta_' + self.BH
         self.dTIME = 'delta_' + self.TIME
@@ -224,26 +210,16 @@ class ConfigBackend:
         self.DEPTHTYPE = 'depth_analysis_type'
         self.DEPTHTVDTO = 'depth_analysis_tvd_to'
         self.COLOR = 'color'
-
-        #drill tab
         self.STAND = 'stand_number'
         self.ROP_MSE = 'rop_mse'
         self.KPIC = 'kpi_color'
-
-        #trip tab
         self.CIRCTIME = 'circulating_time'
         self.WASHTIME = 'washing_time'
         self.REAMTIME = 'reaming_time'
-
-        #report
         self.GROUPWELL = 'group_wells'
         self.AVG = 'AVG'
         self.DIFF = 'DIFFERENCE'
         self.CLIENT = 'client'
-
-        # ------------------------------------------------------------
-        # 8. Conjuntos de columnas estándar
-        # ------------------------------------------------------------
         self.rig_activity_order = [
             'ROTATE','SLIDE','REAM UP','REAM DOWN',
             'CNX (drill)','CNX (trip)','TRIP IN','TRIP OUT',
@@ -259,7 +235,6 @@ class ConfigBackend:
             'REAM UP','REAM DOWN','CNX (trip)','TRIP IN','TRIP OUT',
             'WASH IN','WASH OUT','CIR (static)','STATIC','OTHER','NULL'
         ]
-
         self.time_based_drill_cols = [
             self.WELLID, self.DATETIME, self.TIME, self.DAYN,
             self.HD, self.TVD, self.INC, self.AZM, self.DLS, self.WSEC, 
@@ -268,12 +243,10 @@ class ConfigBackend:
             self.TQ, self.RPM, self.MRPM, self.BRPM, self.MSE, self.MM,
             self.CASING, self.RSUPER, self.RSUBACT, self.LABEL
         ]
-
         self.time_based_drill_rt_raw_cols = [
             self.DATETIME, self.HD, self.BD, self.BH, self.ROP, self.WOB,
             self.HL, self.GPM, self.SPP, self.TQ, self.RPM, self.MRPM, self.BRPM
         ]
-
         self.survey_cols = [
             self.WELLID, self.HD, self.INC, self.AZM, self.TVD, self.DLS,
             self.NS, self.EW, self.TORT, self.ATORT, self.DDI, self.UWDEP,
@@ -301,10 +274,6 @@ class ConfigBackend:
             'well_name','formation','formation_top_depth','formation_top_tvd',
             'formation_top_time','formation_bottom_depth','formation_bottom_time'
         ]
-
-        # ------------------------------------------------------------
-        # 9. Colores y paletas
-        # ------------------------------------------------------------
         self.color_overperf = '#9F8AD9'
         self.color_underperf = '#ce1140'
         self.color_neutral = '#2A2D40'
@@ -312,7 +281,6 @@ class ConfigBackend:
         self.color_RT = '#97FF8F'
         self.color_purple = '#9F8AD9'
         self.daily_report_color_RT = '#558A2E'
-
         self.kpi_colors = [
             self.color_underperf, self.color_underperf,
             self.color_neutral, self.color_overperf, self.color_overperf
@@ -343,10 +311,6 @@ class ConfigBackend:
             key: ('background-color: ' + str(value))
             for key,value in self.rig_activity_color_dict.items()
         }
-
-        # ------------------------------------------------------------
-        # 10. Mapeo de super/sub actividades
-        # ------------------------------------------------------------
         self.super_state = {0:'OTHER',1:'DRILL',7:'TRIP',5:'OUT OF HOLE'}
         self.super_state_swap = {v:k for k,v in self.super_state.items()}
         self.sub_activity_state = {
@@ -356,46 +320,36 @@ class ConfigBackend:
             13:'REAM DOWN',14:'WASH IN',15:'WASH OUT',16:'OUT OF HOLE'
         }
         self.sub_activity_state_swap = {v:k for k,v in self.sub_activity_state.items()}
-           
-    # ------------------------------------------------------------
-    # Métodos de carga de datos
-    # ------------------------------------------------------------
+
     def load_well_general(self):
-        """
-        Carga el archivo well_general.csv, construye los diccionarios
-        y actualiza las variables de CURRENT_WELL_ID, WELLS_SELECT_ID, RIG_NAME.
-        """
-        path_wells = os.path.join(self.INPUT_FOLDER, "database", "well_general.csv")
-        self.df_wells = pd.read_csv(path_wells)
-
-        # Diccionarios {well_id: well_name} y su inverso
-        self.well_name_dict = {
-            row[self.WELLID]: row[self.WELL]
-            for _, row in self.df_wells.iterrows()
-        }
-        self.well_name_dict_swap = {v: k for k,v in self.well_name_dict.items()}
-
-        # Asignar CURRENT_WELL_ID
-        self.CURRENT_WELL_ID = self.well_name_dict_swap[self.CURRENT_WELL_NAME]
-        
-        # Asignar WELLS_SELECT_ID
-        self.WELLS_SELECT_ID = [
-            self.well_name_dict_swap[w] for w in self.WELLS_SELECT_NAME
-        ]
-        
-        # Asignar RIG_NAME
-        self.RIG_NAME = self.df_wells.loc[
-            self.df_wells[self.WELLID] == self.CURRENT_WELL_ID, self.RIG
-        ].values[0]
+        redis_key = f"{self.base_key}:database:well_general"
+        data = self.redis_client.get(redis_key)
+        if not data:
+            print(f"No se encontró '{redis_key}' en Redis. No se asignarán well_name, etc.")
+            return
+        df_wells = pd.read_json(StringIO(data), orient="records")
+        self.df_wells = df_wells
+        self.well_name_dict = {row[self.WELLID]: row[self.WELL] for _, row in df_wells.iterrows()}
+        self.well_name_dict_swap = {v: k for k, v in self.well_name_dict.items()}
+        if self.CURRENT_WELL_NAME in self.well_name_dict_swap:
+            self.CURRENT_WELL_ID = self.well_name_dict_swap[self.CURRENT_WELL_NAME]
+        else:
+            self.CURRENT_WELL_ID = None
+        self.WELLS_SELECT_ID = [self.well_name_dict_swap[w] for w in self.WELLS_SELECT_NAME if w in self.well_name_dict_swap]
+        if self.CURRENT_WELL_ID is not None:
+            row = df_wells.loc[df_wells[self.WELLID] == self.CURRENT_WELL_ID]
+            if not row.empty and self.RIG in row.columns:
+                self.RIG_NAME = row[self.RIG].values[0]
 
     def load_rig_design(self):
-        """
-        Carga el archivo rig_design.csv y asigna el STAND_LENGTH
-        según el RIG_NAME detectado.
-        """
-        path_rig = os.path.join(self.INPUT_FOLDER, "database", "rig_design.csv")
-        self.df_rig = pd.read_csv(path_rig)
-        self.STAND_LENGTH = self.df_rig.loc[
-            self.df_rig[self.RIG] == self.RIG_NAME, 'stand_length'
-        ].values[0]
-
+        redis_key = f"{self.base_key}:database:rig_design"
+        data = self.redis_client.get(redis_key)
+        if not data:
+            print(f"No se encontró '{redis_key}' en Redis. No se asigna STAND_LENGTH.")
+            return
+        df_rig = pd.read_json(StringIO(data), orient="records")
+        self.df_rig = df_rig
+        if self.RIG_NAME and not df_rig.empty and 'stand_length' in df_rig.columns:
+            df_f = df_rig.loc[df_rig[self.RIG] == self.RIG_NAME]
+            if not df_f.empty:
+                self.STAND_LENGTH = df_f['stand_length'].values[0]

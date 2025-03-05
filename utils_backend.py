@@ -27,7 +27,7 @@ dbsrvendpoint = os.getenv('DBSRVDRILLBIEP')
 dbsrvpassword = os.getenv('DBSRVSRVDRILLBIPASSW')
 dbrtsrvendpoint = os.getenv('DBRTSRVENDPOINT')
 dbrtsrvpassword = os.getenv('DBRTSRVPASSWORD')
-APITOKEN5 = os.getenv('APITOKEN5')
+APITOKEN = os.getenv('APITOKEN5')
 
 ## set environmet file "./.datavar"
 datavar_path = join(dirname(__file__), '.datavar')
@@ -182,63 +182,54 @@ def json_return_constructor(apiStatus: bool, requestData: dict, statusType: str,
 
 ############################################################################
 ########################## Token check module ##############################
-def api_token_check(request_headers: str, *args, api_name: str):
-    """
-    Function that checks the Token sent in the API header,
-    and validates if it is correct or not.
-    """
-    # Combine all args into a single string for logging purposes
-    args_str = ' | '.join(map(str, args))
+def api_token_check(request_headers, wellname, username, api_name):
+    current_datetime = datetime.now().strftime("%Y"+"-"+"%m"+"-"+"%d"+" "+"%H"+":"+"%M"+":"+"%S")
 
     auth = request_headers.get('Authorization', None)
     if auth is None:
         apiStatus = True
         requestData = None
-        statusType = "UNDEFINED"
+        statusType = "ERROR"
         statusCode = 401001
         statusMessage = 'Authorization header is not defined.'
-        json_return = json_return_constructor(
-            apiStatus, requestData, statusType, statusCode, statusMessage)
-
-        logging_report(f'{statusType} | {statusCode} | {args_str} | {statusMessage}', 'ERROR', api_name)
+        json_return = json_return_constructor(apiStatus, requestData, statusType, statusCode, statusMessage)
+        
+        logging_report(f'{statusCode} | {statusMessage}', 'ERROR', api_name)
         return json_return
 
     try:
         parts = auth.split()
         token = parts[1]
-    except Exception as err:
+    except:
         apiStatus = True
         requestData = None
-        statusType = "NOT FOUND"
+        statusType = "ERROR"
         statusCode = 401002
-        statusMessage = f'Token value not found: {err}'
-        json_return = json_return_constructor(
-            apiStatus, requestData, statusType, statusCode, statusMessage)
-
-        logging_report(f'{statusType} | {statusCode} | {args_str} | {statusMessage}', 'ERROR', api_name)
+        statusMessage = 'Token value not found.'
+        json_return = json_return_constructor(apiStatus, requestData, statusType, statusCode, statusMessage)
+        
+        logging_report(f'{statusCode} | {statusMessage}', 'ERROR', api_name)
         return json_return
-
-    if token != APITOKEN5:
+    
+    if token != APITOKEN:
         apiStatus = True
         requestData = None
-        statusType = "INVALID"
+        statusType = "ERROR"
         statusCode = 401003
         statusMessage = 'Invalid Token.'
-        json_return = json_return_constructor(
-            apiStatus, requestData, statusType, statusCode, statusMessage)
-
-        logging_report(f'{statusType} | {statusCode} | {args_str} | {statusMessage}', 'ERROR', api_name)
+        json_return = json_return_constructor(apiStatus, requestData, statusType, statusCode, statusMessage)
+        
+        logging_report(f'{statusCode} | {statusMessage}', 'ERROR', api_name)
         return json_return
-
+    
     apiStatus = True
     requestData = None
-    statusType = "VALID"
-    statusCode = 200001
+    statusType = "SUCCESS"
+    statusCode = 200
     statusMessage = 'The Token is valid.'
-    json_return = json_return_constructor(
-        apiStatus, requestData, statusType, statusCode, statusMessage)
-
-    logging_report(f'{statusType} | {statusCode} | {args_str} | {statusMessage}', 'INFO', api_name)
+    json_return = json_return_constructor(apiStatus, requestData, statusType, statusCode, statusMessage)
+    
+    logging_report(f'{statusCode} | {statusMessage}', 'INFO', api_name)
     return json_return
 ####################### end of Token check module ##########################
 

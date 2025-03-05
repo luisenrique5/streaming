@@ -1,69 +1,27 @@
-from flask import jsonify, request, Response
-from src.services.streamingServices.streaming_output_services import GetStreamingOutput
-from utils_backend import api_token_check, logging_report
-import json
+from src.services.api_token_services import Authorization
+from src.services.logging_report_services import LoggingReport
+from src.services.streamingServices.streaming_output_services import StreamingData
 
 class StreamingOutput:
     def __init__(self, client, project, stream, username, scenario, number_of_rows):
-        self.client = client
-        self.project = project
-        self.stream = stream
-        self.username = username
-        self.scenario = scenario
-        self.number_of_rows = number_of_rows
-        self.api_name = 'streaming_output'
-
+        self.__client = client
+        self.__project = project
+        self.__stream = stream
+        self.__username = username
+        self.__scenario = scenario
+        self.__number_of_rows = number_of_rows
+        
     def get_streaming_output(self):
-        token_check = api_token_check(
-            request.headers,
-            self.client,
-            self.project,
-            self.stream,
-            self.username,
-            self.scenario,
-            api_name=self.api_name
-        )
-
-        token_check_dict = json.loads(token_check)
-
-        if token_check_dict.get("statusType") != "VALID":
-            return Response(
-                response=token_check, 
-                status=401,
-                mimetype="application/json"
-            )
-
+        api_name = 'get_streaming_output'
+        
         try:
-            streaming_service = GetStreamingOutput(
-                self.client,
-                self.project,
-                self.stream,
-                self.username,
-                self.scenario,
-                self.number_of_rows
-            )
-            results = streaming_service.calculate_get_streaming_output()
-
-            output_message = (
-                f"{self.number_of_rows} streaming rows of data retrieved. "
-                f"client: '{self.client}', project: '{self.project}', stream: '{self.stream}'"
-            )
-            logging_report(f"{self.api_name} 200044 SUCCESS.", 'INFO', self.api_name)
-
-            return jsonify({
-                'apiStatus': "success",
-                'requestData': results,
-                'statusType': "Success",
-                'statusCode': 200042,
-                'statusMessage': output_message
-            }), 200
-
+            Authorization.token_check(self.__client, self.__scenario, api_name)
+            
+            Streaming_data = StreamingData(self.__client, self.__project, self.__stream, self.__username, self.__scenario, self.__number_of_rows)
+            results = Streaming_data.get_data()
+            return LoggingReport.logging_data(results, api_name)
+         
         except Exception as e:
-            logging_report(f'500000 | Error on {self.api_name}: {str(e)}', 'ERROR', self.api_name)
-            return jsonify({
-                'apiStatus': "error",
-                'requestData': None,
-                'statusType': "InternalError",
-                'statusCode': 500,
-                'statusMessage': f"An error occurred while retrieving results: {str(e)}"
-            }), 500
+            return LoggingReport.logging_error(api_name, e)   
+
+
