@@ -1,35 +1,49 @@
 import redis
+from typing import List
 
 class DirectoryStructureRedis:
-    def __init__(self, client, project, stream, username, scenario, redis_connection):
+    """
+    Emula la creación de una estructura de "directorios" en Redis, donde cada "directorio"
+    se representa como una clave con el formato:
+        input_data:client:project:stream:username:scenario
+    """
+
+    def __init__(self, client: str, project: str, stream: str, username: str, scenario: str, redis_client: redis.Redis) -> None:
         """
-        Emula tu clase DirectoryStructure, pero cada directorio es una clave separada
-        en Redis. Usamos ':' como separador para que RedisInsight muestre subniveles.
+        Args:
+            client: Nombre del cliente.
+            project: Nombre del proyecto.
+            stream: Nombre del stream.
+            username: Nombre de usuario.
+            scenario: Escenario.
+            redis_client: Conexión a Redis.
         """
         self.client = client
         self.project = project
         self.stream = stream
         self.username = username
         self.scenario = scenario
-        self.redis = redis_connection
+        self.redis_client = redis_client
 
-    def create_directory_structure(self):
+    def create_directory_structure(self) -> str:
         """
-        Emula la creación de:
-         input_data/{client}/{project}/{stream}/{username}/{scenario}/
-           ├── csv
-           ├── database
-           ├── plan
-           ├── real_time
-           └── real_time_update
-               └── csv
+        Emula la creación de la siguiente estructura en Redis:
 
-        Pero cada carpeta es una clave con formato 'input_data:client:project:...'
+            input_data/{client}/{project}/{stream}/{username}/{scenario}
+                ├── csv
+                ├── database
+                ├── plan
+                ├── real_time
+                └── real_time_update
+                    └── csv
+
+        Cada "directorio" se guarda como una clave con el separador ':'.
+
+        Returns:
+            La clave base con la estructura 'input_data:client:project:stream:username:scenario'
         """
         base_key = f"input_data:{self.client}:{self.project}:{self.stream}:{self.username}:{self.scenario}"
-
-        # Lista de subcarpetas
-        directories = [
+        directories: List[str] = [
             base_key,
             f"{base_key}:csv",
             f"{base_key}:database",
@@ -40,12 +54,11 @@ class DirectoryStructureRedis:
         ]
 
         try:
-            # Para que RedisInsight muestre algo, guardamos un valor
-            # En este caso, un simple "{}" o "" o lo que gustes
+            pipe = self.redis_client.pipeline()
+            # Con setnx se establece el valor solo si la clave no existe
             for directory in directories:
-                if not self.redis.exists(directory):
-                    self.redis.set(directory, "{}")
-
-            return base_key  # Por si quieres retornarlo
-        except redis.exceptions.RedisError as e:
-            raise ValueError(f"Error creando estructura en Redis: {str(e)}")
+                pipe.setnx(directory, "{}")
+            pipe.execute()
+            return base_key
+        except redis.exceptions.RedisError as error:
+            raise ValueError(f"Error creando estructura en Redis: {error}") from error

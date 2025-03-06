@@ -1,8 +1,12 @@
 import pandas as pd
-from utils_backend import query_execute, get_data_at_interval, logging_report
+from typing import Any
+from utils_backend import query_execute, get_data_at_interval
 
 class WellRepository:
-    def __init__(self, client, project, stream, username, scenario, api_name):
+    def __init__(self, client: str, project: str, stream: str, username: str, scenario: str, api_name: str) -> None:
+        """
+        Repositorio para acceder a los datos generales de pozos y la tabla de time_based_drill.
+        """
         self.__client = client
         self.__project = project
         self.__stream = stream
@@ -10,7 +14,11 @@ class WellRepository:
         self._scenario = scenario
         self.__api_name = api_name
 
-    def get_well_general(self):
+    def get_well_general(self) -> pd.DataFrame:
+        """
+        Consulta la tabla well_general_{client}_{project} en la base de datos 'well_general_db'
+        y retorna un DataFrame con la información de los pozos.
+        """
         try:
             query = f"SELECT * FROM well_general_{self.__client}_{self.__project};"
             data, error = query_execute(query, "well_general_db", True, self.__api_name)
@@ -18,23 +26,25 @@ class WellRepository:
                 raise ValueError(f"Error en get_well_general: {data}")
 
             df = pd.DataFrame(data)
+            # Se asignan los nombres de las columnas de forma explícita
             df.columns = [
                 "id", "well_id", "well_name", "well_type", "client", "rig", "field",
                 "spud_date", "bi_datetime_from", "bi_datetime_to", "total_time",
                 "total_depth", "location", "latitude", "longitude"
             ]
-            del df["id"]
+            df = df.drop(columns=["id"])
             return df
 
         except Exception as e:
-            raise ValueError(f"Error en get_well_general: {str(e)}")
+            raise ValueError(f"Error en get_well_general: {str(e)}") from e
 
-
-    def get_time_based_drill(self):
+    def get_time_based_drill(self) -> pd.DataFrame:
+        """
+        Consulta la tabla time_based_drill_table_{client}_{project} en la base de datos 'time_based_drill_db'
+        y retorna un DataFrame con la información del drilling basado en el tiempo.
+        """
         try:
             query = f"SELECT * FROM time_based_drill_table_{self.__client}_{self.__project};"
-
-            # 2) Ejecutamos la consulta
             data, error = query_execute(query, "time_based_drill_db", True, self.__api_name)
             if error:
                 raise ValueError(f"Error en get_time_based_drill: {data}")
@@ -49,8 +59,8 @@ class WellRepository:
                 "mse", "mud_motor", "casing", "rig_super_state", "rig_sub_activity",
                 "consecutive_labels"
             ]
-            del df["id"]
+            df = df.drop(columns=["id"])
             return df
         
         except Exception as e:
-            raise ValueError(f"Error en get_time_based_drill: {str(e)}")
+            raise ValueError(f"Error en get_time_based_drill: {str(e)}") from e

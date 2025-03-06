@@ -1,9 +1,20 @@
-# src/repositories/rig_repository.py
 import pandas as pd
+from typing import Any
 from utils_backend import query_execute, logging_report
 
 class RigRepository:
-    def __init__(self, client, project, stream, username, scenario, api_name):
+    def __init__(self, client: str, project: str, stream: str, username: str, scenario: str, api_name: str) -> None:
+        """
+        Repositorio para acceder a los datos de diseño de la plataforma (rig design).
+        
+        Args:
+            client: Nombre del cliente.
+            project: Nombre del proyecto.
+            stream: Nombre del stream.
+            username: Nombre de usuario.
+            scenario: Escenario.
+            api_name: Nombre de la API para los logs.
+        """
         self.__client = client
         self.__project = project
         self.__stream = stream
@@ -11,13 +22,23 @@ class RigRepository:
         self.__scenario = scenario
         self.__api_name = api_name
 
-    def get_rig_design(self):
+    def get_rig_design(self) -> pd.DataFrame:
+        """
+        Ejecuta la consulta para obtener el diseño de la plataforma (rig design) de la base de datos 'rig_design_db'
+        y retorna un DataFrame con los datos formateados.
+
+        Returns:
+            DataFrame con la información de rig design.
+
+        Raises:
+            ValueError: Si ocurre un error en la consulta o al procesar los datos.
+        """
         try:
             query = f"SELECT * FROM rig_design_{self.__client}_{self.__project};"
             data, error = query_execute(query, "rig_design_db", True, self.__api_name)
             if error:
                 raise ValueError(f"Error en get_rig_design: {data}")
-            
+
             df = pd.DataFrame(data)
             df.columns = [
                 "id", "rig_id", "rig", "client", "stand_length", "depth_onb_thr",
@@ -30,9 +51,8 @@ class RigRepository:
                 "filter_dict", "filter_dict_1", "filter_dict_5", "filter_dict_10",
                 "filter_dict_15"
             ]
-
-            del df["id"]
+            df = df.drop(columns=["id"])
             return df
-        
+
         except Exception as e:
-            raise ValueError(f"Error en get_rig_design: {str(e)}")
+            raise ValueError(f"Error en get_rig_design: {str(e)}") from e

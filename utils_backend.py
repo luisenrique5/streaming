@@ -127,7 +127,7 @@ def logging_report(writing: str, level: str, api_name: str):
     save_path = f'{logpath}/{api_name}/'
     if not os.path.exists(save_path):
         os.makedirs(save_path)
-        os.chown(save_path, 1000, 1000)
+        # os.chown(save_path, 1000, 1000)
 
     trace_date = datetime.now().strftime("%Y"+"%m"+"%d")
     log_file_path = f'{save_path}{api_name}_{trace_date}.log'
@@ -158,7 +158,7 @@ def logging_report(writing: str, level: str, api_name: str):
         logger.critical("%s", writing)
 
     os.chmod(log_file_path, 0o666)
-    os.chown(log_file_path, 1000, 1000)
+    # os.chown(log_file_path, 1000, 1000)
 ################### end of logging_report module ###########################
 
 ############################################################################
@@ -300,67 +300,115 @@ def query_execute_old(query_command: str, database_name: str,
 
 ############################################################################
 ######################### Query execute module #############################
-def query_execute(query_command: str, database_name: str, allrows: bool, api_name: str):
-    """
-    Function that executes a query to a specific database,
-    and returns the query_response and the error status.
-    Here the inputs are:
-    - query_command: This is the actual query string to the database.
-    - database_name: This is the name of the database.
-    - allrows: True if fetchall, False if fetchone.
-    - api_name: This is the name of the API that does the query.
-    Here the outputs are:
-    - json_return (array or str): The one or two dimensional array with the query response.
-    - query_error (bool): True if the query is not successful, False if successful.
-    """
-    query_error = False
-    query_return = None
+# def query_execute(query_command: str, database_name: str, allrows: bool, api_name: str):
+#     """
+#     Function that executes a query to a specific database,
+#     and returns the query_response and the error status.
+#     Here the inputs are:
+#     - query_command: This is the actual query string to the database.
+#     - database_name: This is the name of the database.
+#     - allrows: True if fetchall, False if fetchone.
+#     - api_name: This is the name of the API that does the query.
+#     Here the outputs are:
+#     - json_return (array or str): The one or two dimensional array with the query response.
+#     - query_error (bool): True if the query is not successful, False if successful.
+#     """
+#     query_error = False
+#     query_return = None
 
+#     try:
+#         if database_name.startswith('streaming'):
+#             connection = psycopg2.connect(user="postgres",
+#                                           password=str(dbrtsrvpassword),
+#                                           host=str(dbrtsrvendpoint),
+#                                           port="5432",
+#                                           database=str(database_name))
+#         else:
+#             connection = psycopg2.connect(user="postgres",
+#                                           password=str(dbsrvpassword),
+#                                           host=str(dbsrvendpoint),
+#                                           port="5432",
+#                                           database=str(database_name))
+
+#         cursor = connection.cursor()
+#         cursor.execute(query_command)
+
+#         if allrows:
+#             query_return = cursor.fetchall()
+#         else:
+#             query_return = cursor.fetchone()
+
+#         logging_report(f'EXECUTED | 200001 | {database_name} | {query_command} | Query executed successfully', 'INFO', api_name)
+
+#     except Exception as error:
+#         query_error = True
+#         error_message = str(error).strip()
+
+#         apiStatus = True
+#         requestData = None
+#         statusType = "FAILURE"
+#         statusCode = 500001
+#         statusMessage = f'Database query error: {error_message}'
+
+#         query_return = json_return_constructor(apiStatus, requestData, statusType, statusCode, statusMessage)
+
+#         logging_report(f'{statusType} | {statusCode} | {database_name} | {query_command} | {statusMessage}', 'ERROR', api_name)
+
+#     finally:
+#         # Close the database connection
+#         if connection:
+#             cursor.close()
+#             connection.close()
+
+#     return query_return, query_error
+# ##################### end of query execute module ##########################
+
+def query_execute(query_command, database_name, allrows, api_name):
+    current_datetime = datetime.now().strftime("%Y"+"-"+"%m"+"-"+"%d"+" "+"%H"+":"+"%M"+":"+"%S")
+
+    if database_name.startswith('streaming'):
+        connection = psycopg2.connect(user = "postgres",
+                                            password = str(dbrtsrvpassword),
+                                            host = str(dbrtsrvendpoint),
+                                            port = "5432",
+                                            database = str(database_name))
+    else:
+        connection = psycopg2.connect(user = "postgres",
+                                        password = str(dbsrvpassword),
+                                        host = str(dbsrvendpoint),
+                                        port = "5432",
+                                        database = str(database_name))
+
+    cursor = connection.cursor()
+    
     try:
-        if database_name.startswith('streaming'):
-            connection = psycopg2.connect(user="postgres",
-                                          password=str(dbrtsrvpassword),
-                                          host=str(dbrtsrvendpoint),
-                                          port="5432",
-                                          database=str(database_name))
-        else:
-            connection = psycopg2.connect(user="postgres",
-                                          password=str(dbsrvpassword),
-                                          host=str(dbsrvendpoint),
-                                          port="5432",
-                                          database=str(database_name))
-
-        cursor = connection.cursor()
         cursor.execute(query_command)
-
-        if allrows:
-            query_return = cursor.fetchall()
-        else:
-            query_return = cursor.fetchone()
-
-        logging_report(f'EXECUTED | 200001 | {database_name} | {query_command} | Query executed successfully', 'INFO', api_name)
 
     except Exception as error:
         query_error = True
-        error_message = str(error).strip()
-
+        error = str(error).replace("\n", " ")
+        error = str(error).replace("\\", "")
+        error = str(error).replace("^", "")
+        error = str(error).strip()
+     
+        errMessage = f'Database query error: {error}'
+        print(errMessage)
         apiStatus = True
         requestData = None
-        statusType = "FAILURE"
+        statusType = "ERROR"
         statusCode = 500001
-        statusMessage = f'Database query error: {error_message}'
+        statusMessage = errMessage
+        json_return = json_return_constructor(apiStatus, requestData, statusType,
+                        statusCode, statusMessage)
+   
+        logging_report(f'{database_name} | {query_command} | {statusMessage}', 'ERROR', api_name)
 
-        query_return = json_return_constructor(apiStatus, requestData, statusType, statusCode, statusMessage)
+        return json_return, query_error
 
-        logging_report(f'{statusType} | {statusCode} | {database_name} | {query_command} | {statusMessage}', 'ERROR', api_name)
-
-    finally:
-        # Close the database connection
-        if connection:
-            cursor.close()
-            connection.close()
-
-    return query_return, query_error
+    query_error = False
+    if allrows:
+        return cursor.fetchall(), query_error
+    return cursor.fetchone(), query_error
 ##################### end of query execute module ##########################
 
 ############################################################################
