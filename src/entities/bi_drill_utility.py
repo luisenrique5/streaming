@@ -1803,7 +1803,7 @@ class BI_Drill_Utility:
                             rig_activity_order = None,
                             round_ndigits = None, replace_dot = None,
                             csv_folder = 'csv', plot_folder = 'plot',
-                            save_folder = None,  save = True):
+                            save_folder = None,  save = False):
         
         if MMDD is None:
             MMDD = self.config_backend.MMDD
@@ -2087,7 +2087,7 @@ class BI_Drill_Utility:
                         activity_dict = None,
                         kpi_colors = None, 
                         replace_dot = None, round_ndigits = None, 
-                        save_folder = None,  save = True) -> pd.DataFrame:
+                        save_folder = None,  save = False) -> pd.DataFrame:
         
         if WELL is None:
             WELL = self.config_backend.WELLID

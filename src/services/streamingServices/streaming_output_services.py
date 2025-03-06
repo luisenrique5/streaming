@@ -4,7 +4,6 @@ import traceback
 import pandas as pd
 from flask import Response
 
-from src.entities.session_manager import SessionManager
 from src.entities.plan_loader import PlanLoader
 from src.entities.config_backend import ConfigBackend
 from src.entities.streaming_input import StreamingInput
@@ -12,10 +11,10 @@ from src.repositories.well_repository import WellRepository
 from src.repositories.rig_repository import RigRepository
 from src.repositories.streaming_repository import StreamingRepository
 from src.entities.drill_data_processor import DrillDataProcessor
-from utils_backend import logging_report, modify_strings
-
 from src.repositories.connection_redis_repository import ConnectionRedisRepository
 from src.entities.directory_structure_redis import DirectoryStructureRedis
+from src.entities.read_redis_utils import read_json_from_redis
+from src.entities.bi_drill_utility import BI_Drill_Utility
 
 
 class StreamingData:
@@ -38,16 +37,16 @@ class StreamingData:
             redis_connection = db.get_connection()
             ds = DirectoryStructureRedis(self.__client, self.__project, self.__stream, self.__username, self.__scenario, redis_connection)
             base_key = ds.create_directory_structure()
-            # data = self.__get_and_save_data(base_key, redis_connection)
+            data = self.__get_and_save_data(base_key, redis_connection)
             
-            # if data == {}:
-            #     raise ValueError("No se encontraron datos en la base de datos.")
-            # else:
-            current_measured_depth = 9656.55 #data['current_measured_depth']
-            streaming_input = StreamingInput(self.__client, self.__project, self.__stream, self.__username, self.__scenario, self.__api_name, base_key, redis_connection)
-            current_diameter, diameters_list = streaming_input.get_current_bit_size(current_measured_depth)
-            streaming_input.create_inputs_json(current_diameter)
-            print(f"current_diameter: {current_diameter} diameters_list: {diameters_list}")
+            if data == {}:
+                raise ValueError("No se encontraron datos en la base de datos.")
+            else:
+                current_measured_depth = data['current_measured_depth'] #9656.55 #
+                streaming_input = StreamingInput(self.__client, self.__project, self.__stream, self.__username, self.__scenario, self.__api_name, base_key, redis_connection)
+                current_diameter, diameters_list = streaming_input.get_current_bit_size(current_measured_depth)
+                streaming_input.create_inputs_json(current_diameter)
+                print(f"current_diameter: {current_diameter} diameters_list: {diameters_list}")
                 
             # # 4.5) Ajustes si hay measured_depth
             # if 'current_measured_depth' in data:
@@ -70,36 +69,51 @@ class StreamingData:
             process_path = process_drilling_data.process()
             print(f"process_path: {process_path}")
 
-            # # 4.7) Carga CSVs resultantes
-            # rt_tbd_path = os.path.join(process_path, 'real_time_update', 'time_based_drill_current_well_out.csv')
-            # rt_os_path = os.path.join(process_path, 'real_time_update', 'official_survey_current_well_out.csv')
+            bi_drill_utility = BI_Drill_Utility(base_key, redis_connection)
+            # Leer DataFrames desde Redis (ya invertidos)
+            # Leer los DataFrames desde Redis (ya invertidos)
+            df_rt_tbd = read_json_from_redis(redis_connection, f"{process_path}:time_based_drill_current_well_out", 
+                                            parse_dates=[bi_drill_utility.DATETIME]).iloc[::-1]
+            df_rt_os = read_json_from_redis(redis_connection, f"{process_path}:official_survey_current_well_out").iloc[::-1]
 
-            # df_rt_tbd = pd.read_csv(rt_tbd_path).iloc[::-1]  # invertimos orden
-            # df_rt_os = pd.read_csv(rt_os_path).iloc[::-1]
+            # Aplicar la lógica de agregación o limitación de filas
+            df_rt_tbd = self.__apply_row_limit_or_aggregation(df_rt_tbd)
+            df_rt_os = self.__apply_row_limit_or_aggregation(df_rt_os)
 
-            # # 4.8) Aplica agregación / limitación de filas
-            # df_rt_tbd = self.__apply_row_limit_or_aggregation(df_rt_tbd)
-            # df_rt_os = self.__apply_row_limit_or_aggregation(df_rt_os)
+            # Rellenar NaN con -999.25
+            df_rt_tbd = df_rt_tbd.fillna(-999.25)
+            df_rt_os = df_rt_os.fillna(-999.25)
 
-            # # 4.9) Rellena NaN
-            # df_rt_tbd = df_rt_tbd.fillna(-999.25)
-            # df_rt_os = df_rt_os.fillna(-999.25)
+            # --- Formatear columnas para que coincida con el formato deseado ---
 
-            # dict_rt_tbd = df_rt_tbd.to_dict(orient='records')
-            # dict_rt_os = df_rt_os.to_dict(orient='records')
+            # 1. Formatear 'datetime' al formato "YYYY-MM-DD HH:MM:SS"
+            if "datetime" in df_rt_tbd.columns:
+                df_rt_tbd["datetime"] = pd.to_datetime(df_rt_tbd["datetime"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+            if "datetime" in df_rt_os.columns:
+                df_rt_os["datetime"] = pd.to_datetime(df_rt_os["datetime"]).dt.strftime("%Y-%m-%d %H:%M:%S")
 
-            # # 4.10) Retorna un dict con la data
-            # return {
-            #     "tbd": dict_rt_tbd,
-            #     "os": dict_rt_os
-            # }
+            # 2. Convertir 'duration' a string en formato de tiempo (por ejemplo, si duration está en minutos)
+            if "duration" in df_rt_tbd.columns:
+                # Asumiendo que la duración está en minutos, convertir a Timedelta y luego a string
+                df_rt_tbd["duration"] = df_rt_tbd["duration"].apply(lambda x: str(pd.Timedelta(minutes=x)))
+
+            # 3. Si necesitas que el índice se guarde como columna "Unnamed: 0", resetea el índice
+            df_rt_tbd = df_rt_tbd.reset_index().rename(columns={"index": "Unnamed: 0"})
+            df_rt_os = df_rt_os.reset_index().rename(columns={"index": "Unnamed: 0"})
+
+            # Convertir los DataFrames a diccionarios (orient='records')
+            dict_rt_tbd = df_rt_tbd.to_dict(orient='records')
+            dict_rt_os = df_rt_os.to_dict(orient='records')
+
+            # Retornar el diccionario final
+            return {
+                "tbd": dict_rt_tbd,
+                "os": dict_rt_os
+            }
+
 
         except Exception as e:
-            # Loggea y relanza para que el controller maneje la excepción
-            print(f"Error en calculate_get_streaming_output: {str(e)}")
-            print("Traceback completo:")
-            print(traceback.format_exc())
-            raise
+            raise ValueError(f"Error en get_data: {str(e)}")
 
     def __get_and_save_data(self, base_key, redis_connection):
         try:
@@ -155,10 +169,9 @@ class StreamingData:
     def __apply_row_limit_or_aggregation(self, df):
         """
         Aplica la lógica de agregación (por 'aggregated') o limitación
-        de filas (por self.number_of_rows) a un DataFrame.
+        de filas (según self.__number_of_rows) a un DataFrame.
         """
-        # Caso 'aggregated': reducimos filas gradualmente según su longitud.
-        if self.number_of_rows == 'aggregated':
+        if self.__number_of_rows == 'aggregated':
             length = len(df)
             if length > 100000:
                 df = df.iloc[::80, :]
@@ -176,10 +189,8 @@ class StreamingData:
                 df = df.iloc[::2, :]
             return df
         else:
-            # Caso limitación a X filas
             try:
-                limit = int(self.number_of_rows)
+                limit = int(self.__number_of_rows)
                 return df.iloc[:limit]
             except ValueError:
-                # Si no es entero y tampoco es 'aggregated', devolvemos df completo
                 return df
