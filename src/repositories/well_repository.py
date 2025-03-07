@@ -1,66 +1,132 @@
-import pandas as pd
-from typing import Any
-from utils_backend import query_execute, get_data_at_interval
+# well_repository.py
+from sqlalchemy import select, text, func, literal, union_all
+import traceback
 
 class WellRepository:
-    def __init__(self, client: str, project: str, stream: str, username: str, scenario: str, api_name: str) -> None:
+    """
+    Repositorio que, de forma similar a QueryFindParameterValuesByNamesAndDateRange,
+    utiliza SQLAlchemy para consultar dos tablas:
+      1) well_general_{client}_{project}
+      2) time_based_drill_table_{client}_{project}
+
+    En vez de ejecutar directamente, retornamos la query final (o cte) para
+    que el 'service' decida cómo y cuándo ejecutar el statement.
+    """
+
+    def __init__(self, db_connection, client: str, project: str, stream: str,
+                 username: str, scenario: str, api_name: str) -> None:
         """
-        Repositorio para acceder a los datos generales de pozos y la tabla de time_based_drill.
+        Args:
+            db_connection: Conexión o wrapper de SQLAlchemy que tenga un método
+                get_table(tabla: str) -> Table
+            client (str): Cliente
+            project (str): Proyecto
+            stream (str): Nombre de la 'corriente' o 'stream'
+            username (str): Usuario
+            scenario (str): Escenario
+            api_name (str): Nombre del API que consume este repositorio (para referencia)
         """
+        self.__db_connection = db_connection
         self.__client = client
         self.__project = project
         self.__stream = stream
-        self._username = username
-        self._scenario = scenario
+        self.__username = username
+        self.__scenario = scenario
         self.__api_name = api_name
 
-    def get_well_general(self) -> pd.DataFrame:
+    def get_well_general(self):
         """
-        Consulta la tabla well_general_{client}_{project} en la base de datos 'well_general_db'
-        y retorna un DataFrame con la información de los pozos.
+        Construye la consulta (en estilo SQLAlchemy) a la tabla
+        well_general_{client}_{project}. Retorna el statement final, que luego
+        puede ejecutarse con db_connection.execute(...) desde el 'service'.
         """
         try:
-            query = f"SELECT * FROM well_general_{self.__client}_{self.__project};"
-            data, error = query_execute(query, "well_general_db", True, self.__api_name)
-            if error:
-                raise ValueError(f"Error en get_well_general: {data}")
+            # 1) Obtenemos la tabla de la conexión
+            table_name = f"well_general_{self.__client}_{self.__project}"
+            well_table = self.__db_connection.get_table(table_name)
 
-            df = pd.DataFrame(data)
-            # Se asignan los nombres de las columnas de forma explícita
-            df.columns = [
-                "id", "well_id", "well_name", "well_type", "client", "rig", "field",
-                "spud_date", "bi_datetime_from", "bi_datetime_to", "total_time",
-                "total_depth", "location", "latitude", "longitude"
-            ]
-            df = df.drop(columns=["id"])
-            return df
+            # 2) Definimos un CTE con todos los datos de la tabla
+            #    (similar a tu ejemplo, aunque sea un SELECT directo)
+            well_table_data = (
+                select(well_table.c.id,
+                       well_table.c.well_id,
+                       well_table.c.well_name,
+                       well_table.c.well_type,
+                       well_table.c.client,
+                       well_table.c.rig,
+                       well_table.c.field,
+                       well_table.c.spud_date,
+                       well_table.c.bi_datetime_from,
+                       well_table.c.bi_datetime_to,
+                       well_table.c.total_time,
+                       well_table.c.total_depth,
+                       well_table.c.location,
+                       well_table.c.latitude,
+                       well_table.c.longitude)
+            ).cte("well_table_data")
+
+            # 3) Retornamos una consulta final; puede ser simplemente select de la CTE
+            final_query = select(well_table_data)
+
+            return final_query
 
         except Exception as e:
-            raise ValueError(f"Error en get_well_general: {str(e)}") from e
+            error_traceback = traceback.format_exc()
+            raise ValueError(f"Error en get_well_general: {str(e)}\n\nTraceback completo:\n{error_traceback}") from e
 
-    def get_time_based_drill(self) -> pd.DataFrame:
+    def get_time_based_drill(self):
         """
-        Consulta la tabla time_based_drill_table_{client}_{project} en la base de datos 'time_based_drill_db'
-        y retorna un DataFrame con la información del drilling basado en el tiempo.
+        Construye la consulta (en estilo SQLAlchemy) a la tabla
+        time_based_drill_table_{client}_{project}.
+        Retorna un statement final (CTE), similar al método anterior.
         """
         try:
-            query = f"SELECT * FROM time_based_drill_table_{self.__client}_{self.__project};"
-            data, error = query_execute(query, "time_based_drill_db", True, self.__api_name)
-            if error:
-                raise ValueError(f"Error en get_time_based_drill: {data}")
+            # 1) Obtenemos la tabla de la conexión
+            table_name = f"time_based_drill_table_{self.__client}_{self.__project}"
+            drill_table = self.__db_connection.get_table(table_name)
 
-            df = pd.DataFrame(data)
-            df.columns = [
-                "id", "well_id", "datetime", "cumulative_time", "day_number",
-                "measured_depth", "tvd", "incl", "azm", "dls", "well_section",
-                "bit_depth", "hole_diameter", "formation", "block_height", "rop",
-                "wob", "hook_load", "flow_rate", "pit_volume", "diff_pressure", "spp",
-                "annular_pressure", "torque", "surface_rpm", "motor_rpm", "bit_rpm",
-                "mse", "mud_motor", "casing", "rig_super_state", "rig_sub_activity",
-                "consecutive_labels"
-            ]
-            df = df.drop(columns=["id"])
-            return df
-        
+            # 2) Definimos un CTE con todas las columnas
+            drill_table_data = (
+                select(drill_table.c.id,
+                       drill_table.c.well_id,
+                       drill_table.c.datetime,
+                       drill_table.c.cumulative_time,
+                       drill_table.c.day_number,
+                       drill_table.c.measured_depth,
+                       drill_table.c.tvd,
+                       drill_table.c.incl,
+                       drill_table.c.azm,
+                       drill_table.c.dls,
+                       drill_table.c.well_section,
+                       drill_table.c.bit_depth,
+                       drill_table.c.hole_diameter,
+                       drill_table.c.formation,
+                       drill_table.c.block_height,
+                       drill_table.c.rop,
+                       drill_table.c.wob,
+                       drill_table.c.hook_load,
+                       drill_table.c.flow_rate,
+                       drill_table.c.pit_volume,
+                       drill_table.c.diff_pressure,
+                       drill_table.c.spp,
+                       drill_table.c.annular_pressure,
+                       drill_table.c.torque,
+                       drill_table.c.surface_rpm,
+                       drill_table.c.motor_rpm,
+                       drill_table.c.bit_rpm,
+                       drill_table.c.mse,
+                       drill_table.c.mud_motor,
+                       drill_table.c.casing,
+                       drill_table.c.rig_super_state,
+                       drill_table.c.rig_sub_activity,
+                       drill_table.c.consecutive_labels
+                )
+            ).cte("drill_table_data")
+
+            # 3) Consulta final
+            final_query = select(drill_table_data)
+
+            return final_query
+
         except Exception as e:
             raise ValueError(f"Error en get_time_based_drill: {str(e)}") from e

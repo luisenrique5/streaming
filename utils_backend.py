@@ -373,6 +373,7 @@ def query_execute(query_command, database_name, allrows, api_name):
                                             port = "5432",
                                             database = str(database_name))
     else:
+        print(' no streaming entrop')
         connection = psycopg2.connect(user = "postgres",
                                         password = str(dbsrvpassword),
                                         host = str(dbsrvendpoint),
